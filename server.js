@@ -15,7 +15,7 @@ app.get('/healthz', (req, res) => {
 });
 
 /**
- * SkyRush Pro - Unified Multi-Tenant Venue Engine (Game + Cashier Ledger)
+ * SkyRush Pro - Unified Multi-Tenant Venue Engine
  */
 class SkyRushEngine {
   constructor(venueId = 'maestro-sports-bar', rtpTarget = 85) {
@@ -29,11 +29,12 @@ class SkyRushEngine {
     this.crashTarget = 2.00;
     this.history = [1.24, 2.10, 3.45, 1.05, 4.20];
     
+    // nextBet is set to 0 by default so slots never auto-bet on startup
     this.players = {
-      p1: { name: "Player 1", balance: 1000.00, status: 'idle', currentBet: 0, nextBet: 10, winAmt: 0, transactions: [] },
-      p2: { name: "Player 2", balance: 1000.00, status: 'idle', currentBet: 0, nextBet: 10, winAmt: 0, transactions: [] },
-      p3: { name: "Player 3", balance: 1000.00, status: 'idle', currentBet: 0, nextBet: 10, winAmt: 0, transactions: [] },
-      p4: { name: "Player 4", balance: 1000.00, status: 'idle', currentBet: 0, nextBet: 10, winAmt: 0, transactions: [] }
+      p1: { name: "Player 1", balance: 1000.00, status: 'idle', currentBet: 0, nextBet: 0, winAmt: 0, transactions: [] },
+      p2: { name: "Player 2", balance: 1000.00, status: 'idle', currentBet: 0, nextBet: 0, winAmt: 0, transactions: [] },
+      p3: { name: "Player 3", balance: 1000.00, status: 'idle', currentBet: 0, nextBet: 0, winAmt: 0, transactions: [] },
+      p4: { name: "Player 4", balance: 1000.00, status: 'idle', currentBet: 0, nextBet: 0, winAmt: 0, transactions: [] }
     };
 
     this.metrics = {
@@ -47,7 +48,6 @@ class SkyRushEngine {
     this.auditLedger = [];
   }
 
-  // Cryptographically secure RNG for fairness
   secureRandom() {
     const buffer = crypto.randomBytes(4);
     return buffer.readUInt32BE(0) / 4294967296;
@@ -73,6 +73,7 @@ class SkyRushEngine {
 
     Object.keys(this.players).forEach(id => {
       const p = this.players[id];
+      // Only enter game if nextBet is explicitly greater than 0
       if (p.nextBet > 0 && p.balance >= p.nextBet) {
         p.balance -= p.nextBet;
         p.currentBet = p.nextBet;
@@ -120,6 +121,8 @@ class SkyRushEngine {
     Object.keys(this.players).forEach(id => {
       const p = this.players[id];
       if (p.status === 'in_game') p.status = 'lost';
+      // Reset nextBet after round ends so player must opt-in again if desired
+      p.nextBet = 0;
     });
 
     this.metrics.netProfit = this.metrics.totalBets - this.metrics.totalWins;
@@ -134,7 +137,6 @@ class SkyRushEngine {
     }, 3000);
   }
 
-  // Cashier deposit & withdrawal transaction processor
   processCashierTransaction(playerId, type, amount, cashierUsername) {
     const p = this.players[playerId];
     if (!p) return { success: false, error: 'Invalid player slot' };
@@ -231,7 +233,6 @@ wss.on('connection', (ws) => {
     });
 });
 
-// Game loop tick every 50ms
 setInterval(() => {
     for (let venueId in venues) {
         const engine = venues[venueId];
@@ -252,5 +253,5 @@ setInterval(() => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`SkyRush Unified Game & Cashier Server running on port ${PORT}`);
+    console.log(`SkyRush Unified Server running on port ${PORT}`);
 });
