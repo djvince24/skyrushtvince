@@ -1,13 +1,28 @@
-/**
- * SkyRush Pro - Production Server Outcome Engine & Multi-Venue Router
- * Cryptographically secure, RTP-bounded crash game engine.
- */
+const express = require('express');
+const http = require('http');
+const WebSocket = require('ws');
+const path = require('path');
 const crypto = require('crypto');
 
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+
+// Serve static frontend files directly from root
+app.use(express.static(path.join(__dirname)));
+
+// Health check endpoint for Render monitoring
+app.get('/healthz', (req, res) => {
+    res.status(200).send('OK');
+});
+
+/**
+ * SkyRush Pro - Self-Contained Secure Server Engine
+ */
 class SkyRushEngine {
   constructor(venueId = 'default-venue', rtpTarget = 95) {
     this.venueId = venueId;
-    this.rtpTarget = rtpTarget; // e.g., 95%
+    this.rtpTarget = rtpTarget;
     this.volatility = 'medium';
     this.status = 'waiting'; // 'waiting', 'flying', 'crashed'
     this.multiplier = 1.00;
@@ -30,7 +45,6 @@ class SkyRushEngine {
     this.serverSecretSeed = crypto.randomBytes(32).toString('hex');
   }
 
-  // Cryptographically secure float generator [0, 1)
   secureRandom() {
     const buffer = crypto.randomBytes(4);
     const value = buffer.readUInt32BE(0);
@@ -39,17 +53,14 @@ class SkyRushEngine {
 
   generateCrashMultiplier() {
     const r = this.secureRandom();
-    // House edge implementation via RTP weighting
     const effectiveRtp = this.rtpTarget / 100.0;
     
-    // Instant crash edge case (approx 1% house instant bust)
     if (r < (1 - effectiveRtp)) {
       return 1.00;
     }
 
     let multiplier = (1 / (1 - r)) * (effectiveRtp * 0.98);
     
-    // Volatility tuning modifiers
     if (this.volatility === 'low') {
       multiplier = 1.00 + (multiplier - 1.00) * 0.6;
     } else if (this.volatility === 'high') {
@@ -68,7 +79,6 @@ class SkyRushEngine {
     this.flightTime = 0;
     this.status = 'flying';
 
-    // Lock in queued bets
     Object.keys(this.players).forEach(id => {
       const p = this.players[id];
       if (p.nextBet > 0 && p.balance >= p.nextBet) {
@@ -91,10 +101,8 @@ class SkyRushEngine {
       }
     } else if (this.status === 'flying') {
       this.flightTime += deltaSecs;
-      // Exponential curve formula for multiplier progression
       this.multiplier = parseFloat(Math.max(1.00, Math.exp(0.08 * this.flightTime)).toFixed(2));
 
-      // Auto-cashout checks & crash evaluation
       if (this.multiplier >= this.crashTarget) {
         this.multiplier = this.crashTarget;
         this.crashRound();
@@ -129,7 +137,6 @@ class SkyRushEngine {
 
     this.metrics.netProfit = this.metrics.totalBets - this.metrics.totalWins;
 
-    // Reset for next round after pause
     setTimeout(() => {
       this.status = 'waiting';
       this.countdownSecs = 5.0;
@@ -155,4 +162,81 @@ class SkyRushEngine {
   }
 }
 
-module.exports = SkyRushEngine;
+// Multi-venue engine store
+const venues = {};
+function getVenueEngine(venueId = 'default-venue') {
+    if (!venues[venueId]) {
+        venues[venueId] = new SkyRushEngine(venueId, 95);
+    }
+    return venues[venueId];
+}
+
+wss.on('connection', (ws) => {
+    let currentVenue = 'maestro-sports-bar';
+
+    ws.on('message', (message) => {
+        try {
+            const data = JSON.parse(message);
+            if (data.venue_id) currentVenue = data.venue_id;
+
+            const engine = getVenueEngine(currentVenue);
+
+            if (data.type === 'PLAYER_ACTION') {
+                const p = engine.players[data.playerId];
+                if (data.action === 'PLACE_BET' && p) {
+                    p.nextBet = parseFloat(data.betAmount) || 10;
+                } else if (data.action === 'CANCEL_BET' && p) {
+                    p.nextBet = 0;
+                } else if (data.action === 'CASHOUT' && data.playerId) {
+                    engine.cashOut(data.playerId);
+                }
+            } else if (data.type === 'ADMIN_ACTION') {
+                if (data.action === 'START_FLIGHT') {
+                    if (engine.status === 'waiting') engine.startRound();
+                } else if (data.action === 'FORCE_CRASH') {
+                    if (engine.status === 'flying') engine.crashRound();
+                } else if (data.action === 'UPDATE_RTP') {
+                    engine.rtpTarget = parseInt(data.value) || 95;
+                } else if (data.action === 'UPDATE_VOLATILITY') {
+                    engine.volatility = data.value || 'medium';
+                } else if (data.action === 'ADJUST_BALANCE') {
+                    const p = engine.players[data.playerId];
+                    if (p && data.amount > 0) {
+                        if (data.value === 'deposit') {
+                            p.balance += data.amount;
+                            engine.metrics.totalDeposits += data.amount;
+                        } else if (data.value === 'withdraw' && p.balance >= data.amount) {
+                            p.balance -= data.amount;
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('WebSocket error:', e);
+        }
+    });
+});
+
+// Global game tick loop (50ms)
+setInterval(() => {
+    for (let venueId in venues) {
+        const engine = venues[venueId];
+        engine.tick(0.05);
+
+        const payload = JSON.stringify({
+            type: 'STATE_UPDATE',
+            state: engine.getState()
+        });
+
+        wss.clients.forEach((client) => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(payload);
+            }
+        });
+    }
+}, 50);
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`SkyRush Unified Server running on port ${PORT}`);
+});
