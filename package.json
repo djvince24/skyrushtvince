@@ -1,7 +1,7 @@
 {
-  "name": "skyrush",
+  "name": "skyrush-pro",
   "version": "1.0.0",
-  "description": "SkyRush Pro Platform",
+  "description": "SkyRush Pro Commercial Platform",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
