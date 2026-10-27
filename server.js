@@ -14,6 +14,9 @@ app.get('/healthz', (req, res) => {
     res.status(200).send('OK');
 });
 
+/**
+ * SkyRush Pro - Unified Multi-Tenant Venue Engine (Game + Cashier Ledger)
+ */
 class SkyRushEngine {
   constructor(venueId = 'maestro-sports-bar', rtpTarget = 85) {
     this.venueId = venueId;
@@ -25,12 +28,14 @@ class SkyRushEngine {
     this.flightTime = 0;
     this.crashTarget = 2.00;
     this.history = [1.24, 2.10, 3.45, 1.05, 4.20];
+    
     this.players = {
       p1: { name: "Player 1", balance: 1000.00, status: 'idle', currentBet: 0, nextBet: 10, winAmt: 0, transactions: [] },
       p2: { name: "Player 2", balance: 1000.00, status: 'idle', currentBet: 0, nextBet: 10, winAmt: 0, transactions: [] },
       p3: { name: "Player 3", balance: 1000.00, status: 'idle', currentBet: 0, nextBet: 10, winAmt: 0, transactions: [] },
       p4: { name: "Player 4", balance: 1000.00, status: 'idle', currentBet: 0, nextBet: 10, winAmt: 0, transactions: [] }
     };
+
     this.metrics = {
       totalBets: 0.00,
       totalWins: 0.00,
@@ -38,9 +43,11 @@ class SkyRushEngine {
       totalDeposits: 4000.00,
       totalWithdrawals: 0.00
     };
+    
     this.auditLedger = [];
   }
 
+  // Cryptographically secure RNG for fairness
   secureRandom() {
     const buffer = crypto.randomBytes(4);
     return buffer.readUInt32BE(0) / 4294967296;
@@ -51,6 +58,9 @@ class SkyRushEngine {
     const effectiveRtp = this.rtpTarget / 100.0;
     if (r < (1 - effectiveRtp)) return 1.00;
     let multiplier = (1 / (1 - r)) * (effectiveRtp * 0.98);
+    if (this.volatility === 'low') multiplier = 1.00 + (multiplier - 1.00) * 0.6;
+    else if (this.volatility === 'high') multiplier = Math.pow(multiplier, 1.15);
+    else if (this.volatility === 'extreme') multiplier = Math.pow(multiplier, 1.35);
     return parseFloat(Math.max(1.00, multiplier).toFixed(2));
   }
 
@@ -89,6 +99,19 @@ class SkyRushEngine {
     }
   }
 
+  cashOut(playerId) {
+    const p = this.players[playerId];
+    if (this.status === 'flying' && p && p.status === 'in_game') {
+      p.winAmt = parseFloat((p.currentBet * this.multiplier).toFixed(2));
+      p.balance += p.winAmt;
+      p.status = 'cashed_out';
+      this.metrics.totalWins += p.winAmt;
+      this.metrics.netProfit = this.metrics.totalBets - this.metrics.totalWins;
+      return true;
+    }
+    return false;
+  }
+
   crashRound() {
     this.status = 'crashed';
     this.history.unshift(this.multiplier);
@@ -98,6 +121,8 @@ class SkyRushEngine {
       const p = this.players[id];
       if (p.status === 'in_game') p.status = 'lost';
     });
+
+    this.metrics.netProfit = this.metrics.totalBets - this.metrics.totalWins;
 
     setTimeout(() => {
       this.status = 'waiting';
@@ -109,6 +134,7 @@ class SkyRushEngine {
     }, 3000);
   }
 
+  // Cashier deposit & withdrawal transaction processor
   processCashierTransaction(playerId, type, amount, cashierUsername) {
     const p = this.players[playerId];
     if (!p) return { success: false, error: 'Invalid player slot' };
@@ -183,12 +209,21 @@ wss.on('connection', (ws) => {
 
             const engine = getVenueEngine(currentVenue);
 
-            if (data.type === 'CASHIER_ACTION') {
+            if (data.type === 'PLAYER_ACTION') {
+                const p = engine.players[data.playerId];
+                if (data.action === 'PLACE_BET' && p) {
+                    p.nextBet = parseFloat(data.betAmount) || 10;
+                } else if (data.action === 'CASHOUT') {
+                    engine.cashOut(data.playerId);
+                }
+            } else if (data.type === 'CASHIER_ACTION') {
                 const result = engine.processCashierTransaction(data.playerId, data.action, parseFloat(data.amount), data.cashier);
                 ws.send(JSON.stringify({ type: 'CASHIER_RESPONSE', playerId: data.playerId, ...result }));
             } else if (data.type === 'ADMIN_ACTION') {
                 if (data.action === 'START_FLIGHT' && engine.status === 'waiting') engine.startRound();
                 else if (data.action === 'FORCE_CRASH' && engine.status === 'flying') engine.crashRound();
+                else if (data.action === 'UPDATE_RTP') engine.rtpTarget = parseInt(data.value) || 85;
+                else if (data.action === 'UPDATE_VOLATILITY') engine.volatility = data.value || 'medium';
             }
         } catch (e) {
             console.error('WebSocket error:', e);
@@ -196,6 +231,7 @@ wss.on('connection', (ws) => {
     });
 });
 
+// Game loop tick every 50ms
 setInterval(() => {
     for (let venueId in venues) {
         const engine = venues[venueId];
@@ -216,5 +252,5 @@ setInterval(() => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`SkyRush Cashier Server running on port ${PORT}`);
+    console.log(`SkyRush Unified Game & Cashier Server running on port ${PORT}`);
 });
