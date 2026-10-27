@@ -1,12 +1,13 @@
 {
-  "name": "skyrushtvince",
+  "name": "skyrush",
   "version": "1.0.0",
-  "description": "SkyRush Pro Centralized Server",
+  "description": "SkyRush Pro Platform",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
+    "express": "^4.19.2",
     "ws": "^8.16.0"
   }
 }
