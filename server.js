@@ -3,6 +3,7 @@ const http = require('http');
 const WebSocket = require('ws');
 const path = require('path');
 const crypto = require('crypto');
+const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
@@ -14,8 +15,10 @@ app.get('/healthz', (req, res) => {
     res.status(200).send('OK');
 });
 
+const DATA_FILE = path.join(__dirname, 'data.json');
+
 /**
- * SkyRush Pro - Unified Multi-Tenant Venue Engine
+ * SkyRush Pro - Unified Engine with File Persistence
  */
 class SkyRushEngine {
   constructor(venueId = 'maestro-sports-bar', rtpTarget = 85) {
@@ -29,7 +32,6 @@ class SkyRushEngine {
     this.crashTarget = 2.00;
     this.history = [1.24, 2.10, 3.45, 1.05, 4.20];
     
-    // nextBet is set to 0 by default so slots never auto-bet on startup
     this.players = {
       p1: { name: "Player 1", balance: 1000.00, status: 'idle', currentBet: 0, nextBet: 0, winAmt: 0, transactions: [] },
       p2: { name: "Player 2", balance: 1000.00, status: 'idle', currentBet: 0, nextBet: 0, winAmt: 0, transactions: [] },
@@ -46,6 +48,59 @@ class SkyRushEngine {
     };
     
     this.auditLedger = [];
+
+    // Restore state from JSON file if available
+    this.loadStateFromFile();
+  }
+
+  // Load persistent data from disk
+  loadStateFromFile() {
+    try {
+      if (fs.existsSync(DATA_FILE)) {
+        const rawData = fs.readFileSync(DATA_FILE, 'utf8');
+        const savedData = JSON.parse(rawData);
+
+        if (savedData.players) {
+          Object.keys(savedData.players).forEach(id => {
+            if (this.players[id]) {
+              this.players[id].balance = savedData.players[id].balance ?? this.players[id].balance;
+              this.players[id].transactions = savedData.players[id].transactions || [];
+              // Always reset active bet state on reboot to prevent sticking in flights
+              this.players[id].status = 'idle';
+              this.players[id].currentBet = 0;
+              this.players[id].nextBet = 0;
+            }
+          });
+        }
+
+        if (savedData.metrics) {
+          this.metrics = { ...this.metrics, ...savedData.metrics };
+        }
+
+        if (savedData.auditLedger) {
+          this.auditLedger = savedData.auditLedger;
+        }
+
+        console.log('Successfully restored state from persistent storage (data.json)');
+      }
+    } catch (err) {
+      console.error('Failed to load state file:', err.message);
+    }
+  }
+
+  // Save current state to disk
+  saveStateToFile() {
+    try {
+      const dataToSave = {
+        players: this.players,
+        metrics: this.metrics,
+        auditLedger: this.auditLedger,
+        lastSaved: new Date().toISOString()
+      };
+      fs.writeFileSync(DATA_FILE, JSON.stringify(dataToSave, null, 2), 'utf8');
+    } catch (err) {
+      console.error('Failed to write persistent state file:', err.message);
+    }
   }
 
   secureRandom() {
@@ -71,19 +126,22 @@ class SkyRushEngine {
     this.flightTime = 0;
     this.status = 'flying';
 
+    let stateChanged = false;
     Object.keys(this.players).forEach(id => {
       const p = this.players[id];
-      // Only enter game if nextBet is explicitly greater than 0
       if (p.nextBet > 0 && p.balance >= p.nextBet) {
         p.balance -= p.nextBet;
         p.currentBet = p.nextBet;
         p.status = 'in_game';
         this.metrics.totalBets += p.currentBet;
+        stateChanged = true;
       } else {
         p.status = 'idle';
         p.currentBet = 0;
       }
     });
+
+    if (stateChanged) this.saveStateToFile();
   }
 
   tick(deltaSecs = 0.05) {
@@ -108,6 +166,8 @@ class SkyRushEngine {
       p.status = 'cashed_out';
       this.metrics.totalWins += p.winAmt;
       this.metrics.netProfit = this.metrics.totalBets - this.metrics.totalWins;
+      
+      this.saveStateToFile();
       return true;
     }
     return false;
@@ -121,11 +181,11 @@ class SkyRushEngine {
     Object.keys(this.players).forEach(id => {
       const p = this.players[id];
       if (p.status === 'in_game') p.status = 'lost';
-      // Reset nextBet after round ends so player must opt-in again if desired
       p.nextBet = 0;
     });
 
     this.metrics.netProfit = this.metrics.totalBets - this.metrics.totalWins;
+    this.saveStateToFile();
 
     setTimeout(() => {
       this.status = 'waiting';
@@ -173,6 +233,9 @@ class SkyRushEngine {
     if (p.transactions.length > 10) p.transactions.pop();
     this.auditLedger.unshift(txRecord);
     if (this.auditLedger.length > 50) this.auditLedger.pop();
+
+    // Persist immediately on cashier deposits/withdrawals
+    this.saveStateToFile();
 
     return { success: true, txId, newBalance: p.balance, record: txRecord };
   }
